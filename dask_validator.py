@@ -114,7 +114,7 @@ form_answers = valid_ddf.map_partitions(get_form_answers,
                                                 'client_fields': str
                                             })
 
-form_answers.to_sql('tb_forms_answers', 'mysql+pymysql://josesuarez4005:MmqLF,wdZofZyJjlsafQ@172.10.7.224:3306/dba_load_testing',
+form_answers.to_sql('tb_forms_answers', 'mysql+pymysql://josesuarez4005:@172.10.7.224:3306/dba_load_testing',
                     parallel=True,
                     index=False,
                     if_exists='replace')
