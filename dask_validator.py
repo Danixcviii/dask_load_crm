@@ -1,7 +1,7 @@
 import time
 from email_validator import validate_email as email_check, EmailNotValidError
 import re 
-start = time.perf_counter()
+start_time = time.perf_counter()
 import dask.delayed
 from dask.distributed import Client
 import dask.dataframe as dd
@@ -99,15 +99,14 @@ def generate_panderas_column(rules:str) -> Column:
 
             return Column(str, Check(lambda s: s.apply(validate_email, args=(min_length, max_length))), required=False)
 
-
-def validate(chunk: pd.DataFrame):
+def get_valids(chunk: pd.DataFrame, schema: DataFrameSchema):
     try:
         valid_rows = schema(chunk, lazy=True)
-        return valid_rows, pd.DataFrame()
+        return valid_rows
     except pa.errors.SchemaErrors as e:
-        invalid_rows = chunk.loc[uniq_index:=e.failure_cases['index'].drop_duplicates()]
-        valid_rows = chunk.drop(index=uniq_index)
-        return valid_rows, invalid_rows
+        # invalid_rows = chunk.loc[uniq_index:=]
+        valid_rows = chunk.drop(index=e.failure_cases['index'].drop_duplicates())
+        return valid_rows
     
 def get_form_answers(chunk: pd.DataFrame, sections: str, report_fields: list, typification_fields: list, client_fields: list):
     forms_answers = pd.DataFrame()
@@ -124,15 +123,19 @@ def get_form_answers(chunk: pd.DataFrame, sections: str, report_fields: list, ty
     forms_answers['client_fields'] = chunk[client_fields].to_dict('records') if client_fields else '{}'
     return forms_answers
 
+
+
 __CHUNKSIZE__ = 100000
 __UNIQUENAME__ = sys.argv[1]
 
 Client('172.10.7.224:8786')
-print('conection stablished')
+
 metafile = read_metafile(f'/home/data/{__UNIQUENAME__}.json').compute()
-ddf = read_excel_dask(f'/home/data/{__UNIQUENAME__}.xlsx')
-print('file loaded into Dask')
+ddf = read_excel_dask(f'/home/data/{__UNIQUENAME__}.xlsx').drop_duplicates()
+
 ids = {key: str(item['id']) for key, item in metafile['valdict'].items()}
+client_unique, *_ = [item['id'] for item in metafile['valdict'].values() if item['structure_to_save']['client_unique']]
+
 ddf = ddf.rename(columns=ids)
 
 schema = DataFrameSchema(
@@ -149,18 +152,7 @@ schema = DataFrameSchema(
     }
 )
 
-valid_invalid_rows = ddf.map_partitions(validate, meta=(None, None)).compute()
-
-valid_dfs, invalid_dfs = zip(*valid_invalid_rows)
-
-valid_df = pd.concat(valid_dfs)
-invalid_df = pd.concat(invalid_dfs)
-
-print(valid_df.shape)
-print(invalid_df.shape)
-
-valid_ddf = dd.from_pandas(valid_df, chunksize=__CHUNKSIZE__).drop_duplicates()
-invalid_ddf = dd.from_pandas(invalid_df, chunksize=__CHUNKSIZE__).drop_duplicates()
+valid_ddf = ddf.map_partitions(get_valids, schema, meta=ddf).drop_duplicates()
 
 sections = get_sections().compute()
 
@@ -181,10 +173,11 @@ form_answers = valid_ddf.map_partitions(get_form_answers,
                                                 'client_fields': str
                                             })
 
-form_answers.to_sql('tb_forms_answers', 'mysql+pymysql://josesuarez4005:@172.10.7.224:3306/dba_load_testing',
+print(f'form answers build: {time.perf_counter() - start_time: .2f} s')
+
+form_answers.to_sql('tb_forms_answers', 'mysql+pymysql://josesuarez4005:MmqLF,wdZofZyJjlsafQ@172.10.7.224:3306/dba_load_testing',
                     parallel=True,
                     index=False,
-                    if_exists='replace')
+                    if_exists='replace').compute()
 
-end = time.perf_counter()
-print(f"exectime: {end-start:.2f}")
+print(f"exectime: {time.perf_counter() - start_time: .2f} s")
