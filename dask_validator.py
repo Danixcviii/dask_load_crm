@@ -1,0 +1,123 @@
+import time
+start = time.perf_counter()
+import dask.delayed
+from dask.distributed import Client
+import dask.dataframe as dd
+import dask
+from pandera import Column, Check, DataFrameSchema
+import pandera as pa
+import pandas as pd
+from datetime import datetime
+import sys
+import json
+
+
+@dask.delayed
+def read_excel_dask(path: str):
+    df = pd.read_excel(path, dtype=str)
+    return dd.from_pandas(df, chunksize=__CHUNKSIZE__)
+
+@dask.delayed
+def read_metafile(path: str) -> dict:
+    with open(path) as f:
+        return json.loads(f.read())
+    
+@dask.delayed
+def get_sections():
+    with open('/home/data/sections.txt') as f:
+        return f.read()
+
+def date_validator(date: str, format: str = r'%Y-%m-%d'):
+    try:
+        datetime.strptime(date, format)
+        return True
+    except: return False
+
+def validate(chunk: pd.DataFrame):
+    try:
+        valid_rows = schema(chunk, lazy=True)
+        return valid_rows, pd.DataFrame()
+    except pa.errors.SchemaErrors as e:
+        invalid_rows = chunk.loc[uniq_index:=e.failure_cases['index'].drop_duplicates()]
+        valid_rows = chunk.drop(index=uniq_index)
+        return valid_rows, invalid_rows
+    
+def get_form_answers(chunk: pd.DataFrame, sections: str, report_fields: list, typification_fields: list, client_fields: list):
+    forms_answers = pd.DataFrame()
+    forms_answers['index_data'] = chunk.to_dict('records')
+    forms_answers['structure_answer'] = sections
+
+    for index, row in forms_answers.iterrows():
+        values = row['index_data']
+        for key, value in values.items():
+            forms_answers.at[index, 'structure_answer'] = forms_answers.loc[index, 'structure_answer'].replace(f'@@{key}@@', value)
+
+    forms_answers['values_for_reports'] = chunk[report_fields].to_dict('records') if report_fields else '{}'
+    forms_answers['values_for_typification'] = chunk[typification_fields].to_dict('records') if typification_fields else '{}'
+    forms_answers['client_fields'] = chunk[client_fields].to_dict('records') if client_fields else '{}'
+    return forms_answers
+
+__CHUNKSIZE__ = 100000
+__UNIQUENAME__ = sys.argv[1]
+
+Client('172.10.7.224:8786')
+print('conection stablished')
+metafile = read_metafile(f'/home/data/{__UNIQUENAME__}.json').compute()
+ddf = read_excel_dask(f'/home/data/{__UNIQUENAME__}.xlsx')
+print('file loaded into Dask')
+ids = {key: str(item['id']) for key, item in metafile['valdict'].items()}
+ddf = ddf.rename(columns=ids)
+
+schema = DataFrameSchema(
+    {
+        "1727469668797": Column(pa.String, Check.str_length(10, 12), required=True), # required|digits_between:10,12
+        "1727469904582": Column(str, Check(lambda s: s.apply(date_validator))), # required|date|date_format:Y-m-d
+        "1727470064986": Column(str, Check.str_length(8, 9), required=True), # required|string|min:8|max:9
+        "1727470179642": Column(str, Check.str_length(12, 24), nullable=True), # nullable|string|min:12|max:24
+        "1727470303727": Column(str, Check.str_length(1, 50), required=True), # required|string|min:1|max:19
+        "1727470400400": Column(str, Check.str_length(1, 50), required=True), # required|string|min:1|max:50
+        "1727470439915": Column(str, Check.str_length(1, 20), required=True), # required|string|min:1|max:20
+        "1727470519236": Column(str, Check.str_length(10, 12), required=True), # required|string|min:10|max:12
+        "1727470586070": Column(str, Check.str_length(10, 100), required=True) # required|email|min:10|max:100
+    }
+)
+
+valid_invalid_rows = ddf.map_partitions(validate, meta=(None, None)).compute()
+
+valid_dfs, invalid_dfs = zip(*valid_invalid_rows)
+
+valid_df = pd.concat(valid_dfs)
+invalid_df = pd.concat(invalid_dfs)
+
+print(valid_df.shape)
+print(invalid_df.shape)
+
+valid_ddf = dd.from_pandas(valid_df, chunksize=__CHUNKSIZE__).drop_duplicates()
+invalid_ddf = dd.from_pandas(invalid_df, chunksize=__CHUNKSIZE__).drop_duplicates()
+
+sections = get_sections().compute()
+
+report_fields = [str(field['id']) for field in metafile['valdict'].values() if field['structure_to_save']['inReport']]
+typification_fields = [str(field['id']) for field in metafile['valdict'].values() if field['structure_to_save']['isTypificated']]
+client_fields = [str(field['id']) for field in metafile['valdict'].values() if field['structure_to_save']['isClientInfo']]
+
+form_answers = valid_ddf.map_partitions(get_form_answers,
+                                        sections,
+                                        report_fields,
+                                        typification_fields,
+                                        client_fields,
+                                        meta={
+                                                'index_data': str,
+                                                'structure_answer': str,
+                                                'values_for_reports': str,
+                                                'values_for_typification': str,
+                                                'client_fields': str
+                                            })
+
+form_answers.to_sql('tb_forms_answers', 'mysql+pymysql://josesuarez4005:MmqLF,wdZofZyJjlsafQ@172.10.7.224:3306/dba_load_testing',
+                    parallel=True,
+                    index=False,
+                    if_exists='replace')
+
+end = time.perf_counter()
+print(f"exectime: {end-start:.2f}")
