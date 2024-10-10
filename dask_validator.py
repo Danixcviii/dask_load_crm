@@ -29,75 +29,39 @@ def get_sections():
     with open('/home/data/sections.txt') as f:
         return f.read()
 
-def datetime_validator(data: str, format:str) -> bool:
+def datetime_validator(data: str, format:str=r'%Y-%m-%d') -> bool:
     try:
         datetime.strptime(data, format)
         return True
     except: return False
 
-def validate_email(email: str, min_length: int, max_length: int) -> bool:
+def validate_email(email: str) -> bool:
     try:
         email_check(email)  # Validate the email format
-        if min_length <= len(email) <= max_length:
-            return True
-    except EmailNotValidError:
-        return False
-    return False
+        return True
+    except: return False
 
 def generate_panderas_column(rules:str) -> Column:
-    rulesList = rules.split("|")
-    required = rulesList[0]  
-    other_rules = rulesList[1:]
-  
-    if required == "required":
-        if other_rules[0].startswith("digits_between:"):
-            numbers = other_rules.split(":")[1]
-            min_length, max_length = map(int, numbers.split(","))
+    required, *other_rules = rules.split("|")
+    if other_rules[0].startswith("digits_between"):
+        numbers = other_rules[0].split(":")[1]
+        min_length, max_length = map(int, numbers.split(","))
+        checks = [Check.str_length(min_length, max_length)]
+    elif other_rules[0] == "date":
+        checks = [Check(lambda s: s.apply(datetime_validator))]
+    elif other_rules[0] == "string":
+        min_length = int(other_rules[1].split(":")[1])
+        max_length = int(other_rules[2].split(":")[1])
+        checks = [Check.str_length(min_length, max_length)]
+    elif other_rules[0] == "time":
+        checks = [Check(lambda s: s.apply(datetime_validator, args=(r'%H:%M:%S', )))]
+    elif other_rules[0] == "email":
+        min_length = int(other_rules[1].split(":")[1])
+        max_length = int(other_rules[2].split(":")[1])
+        checks = [Check(lambda s: s.apply(validate_email))]
+        # checks = [Check.str_length(min_length, max_length)]
 
-            return Column(pa.String, Check.str_length(min_length, max_length), required=True)
-        
-        elif other_rules[0] == "date":
-            return Column(str, Check(lambda s: s.apply(datetime_validator, args=(r'%Y-%m-%d'))), required=True)
-        
-        elif other_rules[0] == "string":
-            min_length = int(other_rules[1].split(":")[1])
-            max_length = int(other_rules[2].split(":")[1])
-
-            return Column(pa.String, Check.str_length(min_length, max_length), required=True)
-
-        elif other_rules[0] == "time":
-            return Column(str, Check(lambda s: s.apply(datetime_validator, args=(r'%H:%M:%S'))), required=True)
-        
-        elif other_rules[0] == "email":
-       
-            min_length = int(other_rules[1].split(":")[1])
-            max_length = int(other_rules[2].split(":")[1])
-    
-            return Column(str, Check(lambda s: s.apply(validate_email, args=(min_length, max_length))), required=True)
-
-
-    else:
-        if other_rules[0].startswith("digits_between:"):
-            numbers = other_rules.split(":")[1]
-            min_length, max_length = map(int, numbers.split(","))
-            return Column(pa.String, Check.str_length(min_length, max_length), required=False)
-        
-        elif other_rules[0] == "date":
-            return Column(str, Check(lambda s: s.apply(datetime_validator, args=('%Y-%m-%d'))), required=False)
-        
-        elif other_rules[0] == "string":
-            min_length = int(other_rules[1].split(":")[1])
-            max_length = int(other_rules[2].split(":")[1])
-            return Column(pa.String, Check.str_length(min_length, max_length), required=False)
-        
-        elif other_rules[0] == "time":
-            return Column(str, Check(lambda s: s.apply(datetime_validator, args=(r'%H:%M:%S'))), required=False)
-        
-        elif other_rules[0] == "email":
-            min_length = int(other_rules[1].split(":")[1])
-            max_length = int(other_rules[2].split(":")[1])
-
-            return Column(str, Check(lambda s: s.apply(validate_email, args=(min_length, max_length))), required=False)
+    return Column(pa.String, checks, required=required, nullable=(not required))
 
 
 def get_valids(chunk: pd.DataFrame, schema: DataFrameSchema):
@@ -125,60 +89,49 @@ def get_form_answers(chunk: pd.DataFrame, sections: str, report_fields: list, ty
     return forms_answers
 
 
+if __name__ == '__main__':
+    __CHUNKSIZE__ = 100000
+    __UNIQUENAME__ = sys.argv[1]
 
-__CHUNKSIZE__ = 100000
-__UNIQUENAME__ = sys.argv[1]
+    Client('172.10.7.224:8786')
 
-Client('172.10.7.224:8786')
+    metafile = read_metafile(f'/home/data/{__UNIQUENAME__}.json').compute()
+    ddf = read_excel_dask(f'/home/data/{__UNIQUENAME__}.xlsx').drop_duplicates()
 
-metafile = read_metafile(f'/home/data/{__UNIQUENAME__}.json').compute()
-ddf = read_excel_dask(f'/home/data/{__UNIQUENAME__}.xlsx').drop_duplicates()
+    ids = {key: str(item['id']) for key, item in metafile['valdict'].items()}
+    client_unique, *_ = [str(item['id']) for item in metafile['valdict'].values() if item['structure_to_save']['client_unique']]
+    validation_rules = {str(item['id']): item['validation_rule'] for item in metafile['valdict'].values()}
 
-ids = {key: str(item['id']) for key, item in metafile['valdict'].items()}
-client_unique, *_ = [item['id'] for item in metafile['valdict'].values() if item['structure_to_save']['client_unique']]
+    ddf = ddf.rename(columns=ids)
 
-ddf = ddf.rename(columns=ids)
+    schema = DataFrameSchema(
+        {key: generate_panderas_column(item) for key, item in validation_rules.items()}
+    )
 
-schema = DataFrameSchema(
-    {
-        "1727469668797": Column(pa.String, Check.str_length(10, 12), required=True), # required|digits_between:10,12
-        "1727469904582": Column(str, Check(lambda s: s.apply(datetime_validator, args=(r'%Y-%m-%d')))), # required|date|date_format:Y-m-d
-        "1727470064986": Column(str, Check.str_length(8, 9), required=True), # required|string|min:8|max:9
-        "1727470179642": Column(str, Check.str_length(12, 24), nullable=True), # nullable|string|min:12|max:24
-        "1727470303727": Column(str, Check.str_length(1, 50), required=True), # required|string|min:1|max:19
-        "1727470400400": Column(str, Check.str_length(1, 50), required=True), # required|string|min:1|max:50
-        "1727470439915": Column(str, Check.str_length(1, 20), required=True), # required|string|min:1|max:20
-        "1727470519236": Column(str, Check.str_length(10, 12), required=True), # required|string|min:10|max:12
-        "1727470586070": Column(str, Check.str_length(10, 100), required=True) # required|email|min:10|max:100
-    }
-)
+    valid_ddf = ddf.map_partitions(get_valids, schema, meta=ddf)
 
-valid_ddf = ddf.map_partitions(get_valids, schema, meta=ddf).drop_duplicates()
+    sections = get_sections().compute()
 
-sections = get_sections().compute()
+    report_fields = [str(field['id']) for field in metafile['valdict'].values() if field['structure_to_save']['inReport']]
+    typification_fields = [str(field['id']) for field in metafile['valdict'].values() if field['structure_to_save']['isTypificated']]
+    client_fields = [str(field['id']) for field in metafile['valdict'].values() if field['structure_to_save']['isClientInfo']]
 
-report_fields = [str(field['id']) for field in metafile['valdict'].values() if field['structure_to_save']['inReport']]
-typification_fields = [str(field['id']) for field in metafile['valdict'].values() if field['structure_to_save']['isTypificated']]
-client_fields = [str(field['id']) for field in metafile['valdict'].values() if field['structure_to_save']['isClientInfo']]
+    form_answers = valid_ddf.map_partitions(get_form_answers,
+                                            sections,
+                                            report_fields,
+                                            typification_fields,
+                                            client_fields,
+                                            meta={
+                                                    'index_data': str,
+                                                    'structure_answer': str,
+                                                    'values_for_reports': str,
+                                                    'values_for_typification': str,
+                                                    'client_fields': str
+                                                })
 
-form_answers = valid_ddf.map_partitions(get_form_answers,
-                                        sections,
-                                        report_fields,
-                                        typification_fields,
-                                        client_fields,
-                                        meta={
-                                                'index_data': str,
-                                                'structure_answer': str,
-                                                'values_for_reports': str,
-                                                'values_for_typification': str,
-                                                'client_fields': str
-                                            })
+    form_answers.to_sql('tb_forms_answers', 'mysql+pymysql://josesuarez4005:MmqLF,wdZofZyJjlsafQ@172.10.7.224:3306/dba_load_testing',
+                        parallel=True,
+                        index=False,
+                        if_exists='replace').compute()
 
-print(f'form answers build: {time.perf_counter() - start_time: .2f} s')
-
-form_answers.to_sql('tb_forms_answers', 'mysql+pymysql://josesuarez4005:MmqLF,wdZofZyJjlsafQ@172.10.7.224:3306/dba_load_testing',
-                    parallel=True,
-                    index=False,
-                    if_exists='replace').compute()
-
-print(f"exectime: {time.perf_counter() - start_time: .2f} s")
+    print(f"exectime: {time.perf_counter() - start_time: .2f} s")
