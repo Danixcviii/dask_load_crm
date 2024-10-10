@@ -1,5 +1,4 @@
 import time
-from email_validator import validate_email as email_check, EmailNotValidError
 import re 
 start_time = time.perf_counter()
 import dask.delayed
@@ -58,8 +57,7 @@ def generate_panderas_column(rules:str) -> Column:
     elif other_rules[0] == "email":
         min_length = int(other_rules[1].split(":")[1])
         max_length = int(other_rules[2].split(":")[1])
-        checks = [Check(lambda s: s.apply(validate_email))]
-        # checks = [Check.str_length(min_length, max_length)]
+        checks = [Check.str_length(min_length, max_length)]
 
     return Column(pa.String, checks, required=required, nullable=(not required))
 
