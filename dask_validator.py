@@ -1,9 +1,6 @@
 import time
-<<<<<<< Updated upstream
 from email_validator import validate_email as email_check, EmailNotValidError
 import re 
-=======
->>>>>>> Stashed changes
 start_time = time.perf_counter()
 import dask.delayed
 from dask.distributed import Client
