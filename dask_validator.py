@@ -135,7 +135,6 @@ print('file loaded into Dask')
 ids = {key: str(item['id']) for key, item in metafile['valdict'].items()}
 ddf = ddf.rename(columns=ids)
 
-
 schema = DataFrameSchema(
     {
         "1727469668797": Column(pa.String, Check.str_length(10, 12), required=True), # required|digits_between:10,12
