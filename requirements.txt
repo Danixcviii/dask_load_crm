@@ -2,3 +2,4 @@ sqlalchemy
 PyMySQL
 pandera
 openpyxl
+email_validator

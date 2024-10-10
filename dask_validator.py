@@ -1,4 +1,6 @@
 import time
+from email_validator import validate_email as email_check, EmailNotValidError
+import re 
 start = time.perf_counter()
 import dask.delayed
 from dask.distributed import Client
@@ -27,11 +29,76 @@ def get_sections():
     with open('/home/data/sections.txt') as f:
         return f.read()
 
-def date_validator(date: str, format: str = r'%Y-%m-%d'):
+def datetime_validator(data: str, format:str) -> bool:
     try:
-        datetime.strptime(date, format)
+        datetime.strptime(data, format)
         return True
     except: return False
+
+def validate_email(email: str, min_length: int, max_length: int) -> bool:
+    try:
+        email_check(email)  # Validate the email format
+        if min_length <= len(email) <= max_length:
+            return True
+    except EmailNotValidError:
+        return False
+    return False
+
+def generate_panderas_column(rules:str) -> Column:
+    rulesList = rules.split("|")
+    required = rulesList[0]  
+    other_rules = rulesList[1:]
+  
+    if required == "required":
+        if other_rules[0].startswith("digits_between:"):
+            numbers = other_rules.split(":")[1]
+            min_length, max_length = map(int, numbers.split(","))
+
+            return Column(pa.String, Check.str_length(min_length, max_length), required=True)
+        
+        elif other_rules[0] == "date":
+            return Column(str, Check(lambda s: s.apply(datetime_validator, args=(r'%Y-%m-%d'))), required=True)
+        
+        elif other_rules[0] == "string":
+            min_length = int(other_rules[1].split(":")[1])
+            max_length = int(other_rules[2].split(":")[1])
+
+            return Column(pa.String, Check.str_length(min_length, max_length), required=True)
+
+        elif other_rules[0] == "time":
+            return Column(str, Check(lambda s: s.apply(datetime_validator, args=(r'%H:%M:%S'))), required=True)
+        
+        elif other_rules[0] == "email":
+       
+            min_length = int(other_rules[1].split(":")[1])
+            max_length = int(other_rules[2].split(":")[1])
+    
+            return Column(str, Check(lambda s: s.apply(validate_email, args=(min_length, max_length))), required=True)
+
+
+    else:
+        if other_rules[0].startswith("digits_between:"):
+            numbers = other_rules.split(":")[1]
+            min_length, max_length = map(int, numbers.split(","))
+            return Column(pa.String, Check.str_length(min_length, max_length), required=False)
+        
+        elif other_rules[0] == "date":
+            return Column(str, Check(lambda s: s.apply(datetime_validator, args=('%Y-%m-%d'))), required=False)
+        
+        elif other_rules[0] == "string":
+            min_length = int(other_rules[1].split(":")[1])
+            max_length = int(other_rules[2].split(":")[1])
+            return Column(pa.String, Check.str_length(min_length, max_length), required=False)
+        
+        elif other_rules[0] == "time":
+            return Column(str, Check(lambda s: s.apply(datetime_validator, args=(r'%H:%M:%S'))), required=False)
+        
+        elif other_rules[0] == "email":
+            min_length = int(other_rules[1].split(":")[1])
+            max_length = int(other_rules[2].split(":")[1])
+
+            return Column(str, Check(lambda s: s.apply(validate_email, args=(min_length, max_length))), required=False)
+
 
 def validate(chunk: pd.DataFrame):
     try:
@@ -68,10 +135,11 @@ print('file loaded into Dask')
 ids = {key: str(item['id']) for key, item in metafile['valdict'].items()}
 ddf = ddf.rename(columns=ids)
 
+
 schema = DataFrameSchema(
     {
         "1727469668797": Column(pa.String, Check.str_length(10, 12), required=True), # required|digits_between:10,12
-        "1727469904582": Column(str, Check(lambda s: s.apply(date_validator))), # required|date|date_format:Y-m-d
+        "1727469904582": Column(str, Check(lambda s: s.apply(datetime_validator, args=(r'%Y-%m-%d')))), # required|date|date_format:Y-m-d
         "1727470064986": Column(str, Check.str_length(8, 9), required=True), # required|string|min:8|max:9
         "1727470179642": Column(str, Check.str_length(12, 24), nullable=True), # nullable|string|min:12|max:24
         "1727470303727": Column(str, Check.str_length(1, 50), required=True), # required|string|min:1|max:19
