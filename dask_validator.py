@@ -36,16 +36,21 @@ def datetime_validator(data: str, format:str=r'%Y-%m-%d') -> bool:
 
 def validate_email(email: str) -> bool:
     try:
-        email_check(email)  # Validate the email format
+        re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email)
         return True
     except: return False
+
+#la funcion de panderas es Check.str_matches, pero el value puede ser digitos por lo que esta funcion siempre convierte el valor a str
+def validate_only_digits(value) -> bool:
+    value_str = str(value)
+    return bool(re.match(r'^\d+$', value_str))
 
 def generate_panderas_column(rules:str) -> Column:
     required, *other_rules = rules.split("|")
     if other_rules[0].startswith("digits_between"):
         numbers = other_rules[0].split(":")[1]
         min_length, max_length = map(int, numbers.split(","))
-        checks = [Check.str_length(min_length, max_length)]
+        checks = [Check(lambda s: s.apply(validate_only_digits)), Check.str_length(min_length, max_length)]
     elif other_rules[0] == "date":
         checks = [Check(lambda s: s.apply(datetime_validator))]
     elif other_rules[0] == "string":
@@ -57,7 +62,7 @@ def generate_panderas_column(rules:str) -> Column:
     elif other_rules[0] == "email":
         min_length = int(other_rules[1].split(":")[1])
         max_length = int(other_rules[2].split(":")[1])
-        checks = [Check.str_length(min_length, max_length)]
+        checks = [Check.str_length(min_length, max_length), Check(lambda s: s.apply(validate_email))]
 
     return Column(pa.String, checks, required=required, nullable=(not required))
 
