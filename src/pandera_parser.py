@@ -5,7 +5,7 @@ from datetime import datetime
 import re
 
 class PanderaParser(object):
-    
+
     def validate_datetime(self, date: str, fmt:str) -> bool:
         try:
             date, *_ = date.split()
@@ -20,6 +20,14 @@ class PanderaParser(object):
     def validate_only_digits(self, value: str | int) -> bool:
         return bool(re.match(r'^\d+$', str(value)))
     
+    def translate_datetime_fmt(self, laravel_fmt:str) -> str:
+        fmt_dict = {
+            "H:i:s" : r'%H:%M:%S',
+            "Y-m-d" : r'%Y-%m-%d'
+        }
+
+        return fmt_dict.get(laravel_fmt, "")
+
     def parse_schema(self, colrules: dict) -> pa.DataFrameSchema:
         return pa.DataFrameSchema(
             {colname: self.parse(rule) for colname, rule in colrules.items()}
@@ -32,10 +40,11 @@ class PanderaParser(object):
             min_length, max_length = map(int, numbers.split(","))
             checks = [pa.Check.str_length(min_length, max_length),
                       pa.Check(lambda s: s.apply(self.validate_only_digits), error='It should contain only numbers')]
-            
         elif other_rules[0] == "date":
-            checks = [pa.Check(lambda s: s.apply(self.validate_datetime, args=(r'%Y-%m-%d', )),
-                               error='Invalid date format YYY-mm-dd')]
+            laravel_fmt = other_rules[1].replace("date_format:", "")
+            python_fmt = self.translate_datetime_fmt(laravel_fmt)
+            checks = [pa.Check(lambda s: s.apply(self.validate_datetime, args=(python_fmt, )),
+                               error=f'Invalid format {python_fmt}')]
         elif other_rules[0] == "string":
             min_length = int(other_rules[1].split(":")[1])
             max_length = int(other_rules[2].split(":")[1])
