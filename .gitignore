@@ -4,7 +4,6 @@ ptest.py
 test.py
 validation_dict.json
 laravel_validator.py
-main.py
 __pycache__/*
 data/*
 venv/*
